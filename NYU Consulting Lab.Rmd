@@ -1,0 +1,604 @@
+---
+title: "NYU Consulting Lab"
+author: "NYU Consulting Lab"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## needed libraries
+```{r}
+library(haven)
+library(MASS)
+library(tidyr)
+library(readr)
+library(tidyverse)
+library(readxl)
+library(psych)
+library(dplyr)
+library(descr)
+library(knitr)
+library(caret)
+library(dplyr)
+library(caTools)
+library(randomForest)
+library(ggplot2)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(corrplot)
+library(FNN)
+library(class)
+library(ISLR)
+library(boot)
+library(pROC)
+library(ROCR)
+library(xgboost)
+library(e1071)
+library(gbm)
+library(xgboost)
+library(Matrix)
+```
+
+## importing both datasets
+```{r}
+setwd("G:/My Drive/2023 Fall/Consulting Lab/")
+DECEASED_DONOR_DATA <- read_dta("DECEASED_DONOR_DATA.DTA")
+THORACIC_DATA <- read_dta("THORACIC_DATA.DTA")
+donor_thoracic <- bind_rows(DECEASED_DONOR_DATA, THORACIC_DATA)
+```
+
+## Variable Selection
+```{r}
+donor_thoracic_new<-donor_thoracic %>% 
+  dplyr::select(DON_DATE,AGE_DON,BMI_DON_CALC,COD_CAD_DON,CREAT_DON,SGOT_DON,SGPT_DON,SODIUM170_VAL_DON,TBILI_DON,PO2_DON,CHEST_XRAY_DON,CDC_RISK_HIV_DON,ETHCAT_DON,GENDER_DON,HBV_CORE_DON,HEP_C_ANTI_DON,HGT_CM_DON_CALC,HIST_DIABETES_DON,HIST_HYPERTENS_DON,HIST_CIG_DON,NUM_LU_TX,LUR_DISPOSITION,LUL_DISPOSITION)
+total_observations <- nrow(donor_thoracic)
+print(total_observations)
+```
+
+### Filter data containing date from 2011-07-01 and age below 18 years
+```{r}
+filtered_donor_thoracic_new <- donor_thoracic_new %>%
+  filter(DON_DATE > as.Date("2011-07-01") & AGE_DON < 18)%>%filter(LUR_DISPOSITION != 2 | is.na(LUR_DISPOSITION)) %>% 
+  filter(LUL_DISPOSITION != 1 | is.na(LUL_DISPOSITION))
+num_observations <- nrow(filtered_donor_thoracic_new)
+print(num_observations)
+```
+
+## Checking for NA
+```{r}
+sum(is.na(filtered_donor_thoracic_new)) ## Should return 0
+```
+
+
+## Variable selection + filtering out NA 
+```{r}
+new_don<-filtered_donor_thoracic_new  %>% 
+  dplyr::select(DON_DATE,AGE_DON,BMI_DON_CALC,COD_CAD_DON,CREAT_DON,SGOT_DON,SGPT_DON,SODIUM170_VAL_DON,TBILI_DON,PO2_DON,CHEST_XRAY_DON,CDC_RISK_HIV_DON,ETHCAT_DON,GENDER_DON,HBV_CORE_DON,HEP_C_ANTI_DON,HGT_CM_DON_CALC,HIST_DIABETES_DON,HIST_HYPERTENS_DON,HIST_CIG_DON,NUM_LU_TX)%>%
+  filter(complete.cases(.))
+```
+
+##checking for NA
+```{r}
+sum(is.na(new_don))
+```
+
+##TOTAL OBSERVATION AFTER REMOVING NA
+```{r}
+Final_Observation <- nrow(new_don)
+print(Final_Observation)
+```
+
+##recoding variables 
+```{r,eval=TRUE}
+
+new_don$COD_CAD_DON [new_don$COD_CAD_DON == 999] <- 5
+
+new_don$HBV_CORE_DON [new_don$HBV_CORE_DON  %in% c("","I","N","ND")] <- 0
+new_don$HBV_CORE_DON [new_don$HBV_CORE_DON =="P"]<-1
+
+new_don$HEP_C_ANTI_DON  [new_don$HEP_C_ANTI_DON  %in% c("","I","N","ND")] <- 0
+new_don$HEP_C_ANTI_DON  [new_don$HEP_C_ANTI_DON == "P"]<-1
+
+new_don$HIST_DIABETES_DON   [new_don$HIST_DIABETES_DON ==1]<-0
+new_don$HIST_DIABETES_DON   [new_don$HIST_DIABETES_DON   %in% c(2,3,4,5,998)] <- 1
+
+new_don$HIST_HYPERTENS_DON  [new_don$HIST_HYPERTENS_DON  == "Y"]<-1
+new_don$HIST_HYPERTENS_DON   [new_don$HIST_HYPERTENS_DON   %in% c("N","U")] <- 0
+
+new_don$HIST_CIG_DON [new_don$HIST_CIG_DON  == "Y"]<-1
+new_don$HIST_CIG_DON [new_don$HIST_CIG_DON  %in% c("N","U")] <- 0
+
+new_don$CHEST_XRAY_DON[new_don$CHEST_XRAY_DON ==2]<-1
+new_don$CHEST_XRAY_DON[new_don$CHEST_XRAY_DON %in% c(3,4,5,"NA",998,999)] <- 0
+
+
+new_don$CDC_RISK_HIV_DON [new_don$CDC_RISK_HIV_DON  == "Y"]<-1
+new_don$CDC_RISK_HIV_DON [new_don$CDC_RISK_HIV_DON  %in% c("N","U")] <- 0
+
+new_don$ETHCAT_DON[new_don$ETHCAT_DON %in% c(1,4,5,6,7,9)] <- 0
+new_don$ETHCAT_DON[new_don$ETHCAT_DON ==2]<-1
+
+new_don$NUM_LU_TX[new_don$NUM_LU_TX==2]<-1
+```
+## Converting dataset to long format for only continous variables.
+```{r}
+new_don_long <- new_don %>%
+  pivot_longer(cols = c("AGE_DON", "BMI_DON_CALC", "CREAT_DON", "SGOT_DON", "SGPT_DON", 
+                        "SODIUM170_VAL_DON", "TBILI_DON", "PO2_DON", "HGT_CM_DON_CALC"),
+               names_to = "variable",
+               values_to = "value")
+
+# Create a histogram for all numeric variables in one plot
+new_don_histograms <- ggplot(new_don_long, aes(x = value)) +
+  geom_histogram(bins = 30, color = "black", fill = "lightblue") +
+  facet_wrap(~variable, scales = "free", ncol = 3) +  # adjust ncol based on how many plots you want per row
+  labs(title = "Histograms of Numeric Variables in the new_don Dataset",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+
+# Plot the histograms
+print(new_don_histograms)
+```
+
+
+## Converting dataset to long format for only categorical variables.
+```{r}
+new_don[c("COD_CAD_DON", "GENDER_DON", "HBV_CORE_DON", "HEP_C_ANTI_DON", 
+          "HIST_DIABETES_DON", "HIST_HYPERTENS_DON", "HIST_CIG_DON", 
+          "CHEST_XRAY_DON", "CDC_RISK_HIV_DON", "ETHCAT_DON", "NUM_LU_TX")] <- 
+  lapply(new_don[c("COD_CAD_DON", "GENDER_DON", "HBV_CORE_DON", "HEP_C_ANTI_DON", 
+                  "HIST_DIABETES_DON", "HIST_HYPERTENS_DON", "HIST_CIG_DON", 
+                  "CHEST_XRAY_DON", "CDC_RISK_HIV_DON", "ETHCAT_DON", "NUM_LU_TX")], as.character)
+new_don_cat_long <- new_don %>%
+  pivot_longer(cols = c("COD_CAD_DON", "GENDER_DON", "HBV_CORE_DON", "HEP_C_ANTI_DON", 
+                        "HIST_DIABETES_DON", "HIST_HYPERTENS_DON", "HIST_CIG_DON", 
+                        "CHEST_XRAY_DON", "CDC_RISK_HIV_DON", "ETHCAT_DON", "NUM_LU_TX"),
+               names_to = "variable",
+               values_to = "value")
+new_don_bars <- ggplot(new_don_cat_long, aes(x = value)) +
+  geom_bar(fill = "lightblue", color = "black") +
+  facet_wrap(~variable, scales = "free", ncol = 3) +
+  labs(title = "Bar Plots of Categorical Variables in the new_don Dataset",
+       x = "Value",
+       y = "Count") +
+  theme_minimal()
+print(new_don_bars)
+```
+
+
+
+##Correlation Matrix:
+## Computing and visualizing the correlation between numeric variables.
+```{r}
+cor_matrix <- cor(new_don[, c("AGE_DON", "BMI_DON_CALC", "CREAT_DON", "SGOT_DON", "SGPT_DON")])
+cor_df <- as.data.frame(as.table(cor_matrix))
+names(cor_df) <- c("Var1", "Var2", "Correlation")
+
+ggplot(data = cor_df, aes(x = Var1, y = Var2, fill = Correlation)) +
+  geom_tile() +
+  scale_fill_gradient2() +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap")
+
+```
+
+
+
+## Coverting continuous variables to categorical variables 
+```{r}
+## Age group
+breaks <- c(-Inf, 3, 6, 9, 12, 15, 18, Inf)
+labels <- c("<3", "4-6", "5-9", "10-12", "13-15", "15-18", ">65")
+new_don$AGE_DON <- cut(new_don$AGE_DON, breaks = breaks, labels = labels, right = FALSE)
+
+
+##BMI
+breaks <- c(-Inf, 18.5, 25, 30, 35, 40, Inf)
+labels <- c("<18.5", "18.5-25", "25-30", "30-35", "35-40", ">40")
+new_don$BMI_DON_CALC <- cut(new_don$BMI_DON_CALC, breaks = breaks, labels = labels, right = FALSE)
+
+## Creatinine group
+breaks <- c(-Inf, 1.5, 2, 5, Inf)
+labels <- c("<1.5", "1.5-2", "2-5", ">5")
+new_don$CREAT_DON <- cut(new_don$CREAT_DON, breaks = breaks, labels = labels, right = FALSE)
+
+
+## SGOT (AST)
+breaks <- c(-Inf, 50, 100, 200, Inf)
+labels <- c("<50", "50-100", "100-200", ">200")
+new_don$SGOT_DON <- cut(new_don$SGOT_DON, breaks = breaks, labels = labels, right = FALSE)
+
+## SGPT (ATL)
+breaks <- c(-Inf, 50, 100, 200, Inf)
+labels <- c("<50", "50-100", "100-200", ">200")
+new_don$SGPT_DON <- cut(new_don$SGPT_DON, breaks = breaks, labels = labels, right = FALSE)
+
+## SODIUM
+breaks <- c(-Inf, 135, 155, 160, Inf)
+labels <- c("<135", "135-155", "155-160", ">160")
+new_don$SODIUM170_VAL_DON <- cut(new_don$SODIUM170_VAL_DON, breaks = breaks, labels = labels, right = FALSE)
+
+## TBILI_DON
+breaks <- c(-Inf, 1, 2, 5, Inf)
+labels <- c("<1", "1-2", "2-5", ">5")
+new_don$TBILI_DON <- cut(new_don$TBILI_DON, breaks = breaks, labels = labels, right = FALSE)
+
+
+##PO2_DON group
+new_don$PO2_DON <- cut(new_don$PO2_DON, 
+                      breaks = c(-Inf, 100, 200, 300,400, Inf),
+                      labels = c("<100", "101-200","201-300","301-400", "400+"),
+                      right = FALSE)
+new_don$HGT_CM_DON_CALC<- cut(new_don$HGT_CM_DON_CALC, 
+                      breaks = c(-Inf, 150, 170, Inf),
+                      labels = c("<150", "151-170","170+"),
+                      right = FALSE)
+
+```
+
+
+## Factoring variables
+```{r}
+new_don$AGE_DON <- factor(new_don$AGE_DON)
+new_don$BMI_DON_CALC <- factor(new_don$BMI_DON_CALC)
+new_don$AGE_DON <- factor(new_don$AGE_DON)
+new_don$COD_CAD_DON <- factor(new_don$COD_CAD_DON)
+new_don$CREAT_DON <- factor(new_don$CREAT_DON)
+new_don$SGOT_DON <- factor(new_don$SGOT_DON)
+new_don$SGPT_DON<-factor(new_don$SGPT_DON)
+new_don$SODIUM170_VAL_DON<- factor(new_don$SODIUM170_VAL_DON)
+new_don$TBILI_DON <- factor(new_don$TBILI_DON)
+new_don$PO2_DON <- factor(new_don$PO2_DON)
+new_don$CHEST_XRAY_DON <- factor(new_don$CHEST_XRAY_DON)
+new_don$CDC_RISK_HIV_DON <- factor(new_don$CDC_RISK_HIV_DON)
+new_don$ETHCAT_DON <- factor(new_don$ETHCAT_DON)
+new_don$GENDER_DON <- factor(new_don$GENDER_DON)
+new_don$HBV_CORE_DON <- factor(new_don$HBV_CORE_DON)
+new_don$HEP_C_ANTI_DON <- factor(new_don$HEP_C_ANTI_DON)
+new_don$HIST_DIABETES_DON <- factor(new_don$HIST_DIABETES_DON)
+new_don$HIST_HYPERTENS_DON <- factor(new_don$HIST_HYPERTENS_DON)
+new_don$HIST_CIG_DON <- factor(new_don$HIST_CIG_DON)
+new_don$NUM_LU_TX<- factor(new_don$NUM_LU_TX)
+```
+
+
+#Univariate Analysis
+```{r}
+library(descr)
+freq(new_don$AGE_DON,plot = FALSE)
+freq(new_don$BMI_DON_CALC,plot = FALSE)
+freq(new_don$COD_CAD_DON,plot = FALSE)
+freq(new_don$CREAT_DON,plot = FALSE)
+freq(new_don$SGOT_DON,plot = FALSE)
+freq(new_don$SGPT_DON,plot = FALSE)
+freq(new_don$SODIUM170_VAL_DON,plot=FALSE)
+freq(new_don$TBILI_DON,plot=FALSE)
+freq(new_don$PO2_DON,plot=FALSE)
+freq(new_don$CHEST_XRAY_DON,plot=FALSE)
+freq(new_don$CDC_RISK_HIV_DON,plot=FALSE)
+freq(new_don$ETHCAT_DON,plot=FALSE)
+freq(new_don$GENDER_DON,plot=FALSE)
+freq(new_don$HBV_CORE_DON,plot=FALSE)
+freq(new_don$HEP_C_ANTI_DON,plot=FALSE)
+freq(new_don$HGT_CM_DON_CALC,plot=FALSE)
+freq(new_don$HIST_DIABETES_DON,plot=FALSE)
+freq(new_don$HIST_HYPERTENS_DON,plot=FALSE)
+freq(new_don$HIST_CIG_DON,plot=FALSE)
+freq(new_don$NUM_LU_TX,plot=FALSE)
+
+```
+
+
+##Model Building (Splitting Dataset in Training and Testing)
+```{r}
+set.seed(123)
+splitIndex <- createDataPartition(new_don$NUM_LU_TX, p = 0.7, list = FALSE)
+train_data <- new_don[splitIndex, ]
+test_data <- new_don[-splitIndex, ]
+train_data <- train_data[, !names(train_data) %in% c("DON_DATE")]
+test_data <- test_data[, !names(test_data) %in% c("DON_DATE")]
+```
+
+
+
+##Model Training and Evaluation
+
+## Cross Validation for logistic model
+```{r}
+library(pROC)
+library(caret)
+num_folds <- 10
+cv_control <- trainControl(method = "cv", number = num_folds)
+set.seed(7)
+model_logistic_cv <- train(NUM_LU_TX ~ ., data = train_data, method = "glm", family = binomial, trControl = cv_control)
+predictions_logistic_cv <- predict(model_logistic_cv, newdata = test_data)
+numeric_predictions <- as.numeric(predictions_logistic_cv)
+roc_logistic_cv <- pROC::roc(response = test_data$NUM_LU_TX, predictor = numeric_predictions)
+auc_logistic_cv <- pROC::auc(roc_logistic_cv)
+correct_predictions_cv <- sum(predictions_logistic_cv == test_data$NUM_LU_TX)
+total_predictions_cv <- length(test_data$NUM_LU_TX)
+ca_logistic_cv <- correct_predictions_cv / total_predictions_cv
+confusion_matrix_cv <- confusionMatrix(data = factor(predictions_logistic_cv), reference = factor(test_data$NUM_LU_TX))
+f1_score_cv <- confusion_matrix_cv$byClass['F1']
+precision_cv <- confusion_matrix_cv$byClass['Pos Pred Value']
+recall_cv <- confusion_matrix_cv$byClass['Sensitivity']
+cat("AUC for Logistic Regression (Cross-Validated):", auc_logistic_cv, "\n")
+cat("Classification Accuracy (CA) for Logistic Regression (Cross-Validated):", ca_logistic_cv, "\n")
+cat("F1 Score for Logistic Regression (Cross-Validated):", f1_score_cv, "\n")
+cat("Precision for Logistic Regression (Cross-Validated):", precision_cv, "\n")
+cat("Recall for Logistic Regression (Cross-Validated):", recall_cv, "\n")
+```
+
+## Cross validation for decision tree model
+```{r}
+library(pROC)
+library(caret)
+num_folds <- 10 
+cv_control <- trainControl(method = "cv", number = num_folds)
+set.seed(7)
+model_tree_cv <- train(NUM_LU_TX ~ ., data = train_data, method = "rpart", trControl = cv_control)
+predictions_tree_cv <- predict(model_tree_cv, newdata = test_data, type = "raw")
+correct_predictions_cv <- sum(predictions_tree_cv == test_data$NUM_LU_TX)
+total_predictions_cv <- length(test_data$NUM_LU_TX)
+ca_tree_cv <- correct_predictions_cv / total_predictions_cv
+roc_tree_cv <- multiclass.roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_tree_cv == "1", 1, 0))
+auc_tree_cv <- auc(roc_tree_cv)
+confusion_matrix_tree_cv <- confusionMatrix(predictions_tree_cv, test_data$NUM_LU_TX)
+f1_score_tree_cv <- confusion_matrix_tree_cv$byClass['F1']
+precision_tree_cv <- confusion_matrix_tree_cv$byClass['Pos Pred Value']
+recall_tree_cv <- confusion_matrix_tree_cv$byClass['Sensitivity']
+cat("AUC for Decision Tree (Cross-Validated):", auc_tree_cv, "\n")
+cat("Classification Accuracy (CA) for Decision Tree (Cross-Validated):", ca_tree_cv, "\n")
+cat("F1 Score for Decision Tree (Cross-Validated):", f1_score_tree_cv, "\n")
+cat("Precision for Decision Tree (Cross-Validated):", precision_tree_cv, "\n")
+cat("Recall for Decision Tree (Cross-Validated):", recall_tree_cv, "\n")
+
+```
+
+## Cross validation for random forest model
+```{r}
+library(pROC)
+library(caret)
+num_folds <- 10  # setting cv to 10 folds
+cv_control <- trainControl(method = "cv", number = num_folds)
+set.seed(7)
+model_rf_cv <- randomForest(NUM_LU_TX ~ ., data = train_data, method = "rf", trControl = cv_control)
+predictions_rf_cv <- predict(model_rf_cv, newdata = test_data)
+
+correct_predictions_cv <- sum(predictions_rf_cv == test_data$NUM_LU_TX)
+total_predictions_cv <- length(test_data$NUM_LU_TX)
+ca_rf_cv <- correct_predictions_cv / total_predictions_cv
+
+roc_rf_cv <- multiclass.roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_rf_cv == "1", 1, 0))
+auc_rf_cv <- auc(roc_rf_cv)
+
+confusion_matrix_rf_cv <- confusionMatrix(predictions_rf_cv, test_data$NUM_LU_TX)
+f1_score_rf_cv <- confusion_matrix_rf_cv$byClass['F1']
+precision_rf_cv <- confusion_matrix_rf_cv$byClass['Pos Pred Value']
+recall_rf_cv <- confusion_matrix_rf_cv$byClass['Sensitivity']
+cat("AUC for Random Forest (Cross-Validated):", auc_rf_cv, "\n")
+cat("Classification Accuracy (CA) for Random Forest (Cross-Validated):", ca_rf_cv, "\n")
+cat("F1 Score for Random Forest (Cross-Validated):", f1_score_rf_cv, "\n")
+cat("Precision for Random Forest (Cross-Validated):", precision_rf_cv, "\n")
+cat("Recall for Random Forest (Cross-Validated):", recall_rf_cv, "\n")
+
+```
+
+## cross validation for naive bayes model
+```{r}
+library(pROC)
+library(caret)
+num_folds <- 10  # setting cv to 10 folds
+cv_control <- trainControl(method = "cv", number = num_folds)
+set.seed(7)
+model_nb_cv <- train(NUM_LU_TX ~ ., data = train_data, method = "naive_bayes", trControl = cv_control)
+predictions_nb_cv <- predict(model_nb_cv, newdata = test_data, type = "raw")
+correct_predictions_cv <- sum(predictions_nb_cv == test_data$NUM_LU_TX)
+total_predictions_cv <- length(test_data$NUM_LU_TX)
+ca_nb_cv <- correct_predictions_cv / total_predictions_cv
+roc_nb_cv <- multiclass.roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_nb_cv == "1", 1, 0))
+auc_nb_cv <- auc(roc_nb_cv)
+confusion_matrix_nb_cv <- confusionMatrix(predictions_nb_cv, test_data$NUM_LU_TX)
+f1_score_nb_cv <- confusion_matrix_nb_cv$byClass['F1']
+precision_nb_cv <- confusion_matrix_nb_cv$byClass['Pos Pred Value']
+recall_nb_cv <- confusion_matrix_nb_cv$byClass['Sensitivity']
+cat("AUC for Naive Bayes (Cross-Validated):", auc_nb_cv, "\n")
+cat("Classification Accuracy (CA) for Naive Bayes (Cross-Validated):", ca_nb_cv, "\n")
+cat("F1 Score for Naive Bayes (Cross-Validated):", f1_score_nb_cv, "\n")
+cat("Precision for Naive Bayes (Cross-Validated):", precision_nb_cv, "\n")
+cat("Recall for Naive Bayes (Cross-Validated):", recall_nb_cv, "\n")
+```
+
+## Cross Validation for Gradient boosting(XG boost) model
+```{r}
+library(pROC)
+library(caret)
+library(xgboost)
+num_folds <- 10 
+cv_control <- trainControl(method = "cv", number = num_folds)
+tuneGrid <- expand.grid(
+  nrounds = 10,  # Number of boosting rounds
+  max_depth = 10,     # Maximum depth of trees
+  eta = 0.1,    # Learning rate
+  gamma = 0,                  # Minimum loss reduction required to make a further partition
+  colsample_bytree = 1,       # Fraction of features to be randomly sampled for building trees
+  min_child_weight = 1,       # Minimum sum of instance weight (hessian) needed in a child
+  subsample = 1               # Fraction of training data to randomly sample
+)
+set.seed(7)
+model_xgb_cv <- train(
+  NUM_LU_TX ~ ., data = train_data, method = "xgbTree", trControl = cv_control, tuneGrid = tuneGrid
+)
+predictions_xgb_cv <- predict(model_xgb_cv, newdata = test_data)
+correct_predictions_cv <- sum(predictions_xgb_cv == test_data$NUM_LU_TX)
+total_predictions_cv <- length(test_data$NUM_LU_TX)
+ca_xgb_cv <- correct_predictions_cv / total_predictions_cv
+roc_xgb_cv <- multiclass.roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_xgb_cv == "1", 1, 0))
+auc_xgb_cv <- auc(roc_xgb_cv)
+confusion_matrix_xgb_cv <- confusionMatrix(predictions_xgb_cv, test_data$NUM_LU_TX)
+f1_score_xgb_cv <- confusion_matrix_xgb_cv$byClass['F1']
+precision_xgb_cv <- confusion_matrix_xgb_cv$byClass['Pos Pred Value']
+recall_xgb_cv <- confusion_matrix_xgb_cv$byClass['Sensitivity']
+cat("AUC for XGBoost (Cross-Validated):", auc_xgb_cv, "\n")
+cat("Classification Accuracy (CA) for XGBoost (Cross-Validated):", ca_xgb_cv, "\n")
+cat("F1 Score for XGBoost (Cross-Validated):", f1_score_xgb_cv, "\n")
+cat("Precision for XGBoost (Cross-Validated):", precision_xgb_cv, "\n")
+cat("Recall for XGBoost (Cross-Validated):", recall_xgb_cv, "\n")
+
+```
+
+## Creating table to compare model accuracy, test error, and train error
+```{r}
+model_metrics <- data.frame(
+  Model = c("Logistic Regression", "Decision Tree", "Random Forest", "Naive Bayes", "XGBoost"),
+  Accuracy = c(ca_logistic_cv, ca_tree_cv, ca_rf_cv, ca_nb_cv, ca_xgb_cv),
+  AUC = c(auc_logistic_cv, auc_tree_cv, auc_rf_cv, auc_nb_cv, auc_xgb_cv),
+  Precision = c(precision_cv, precision_tree_cv, precision_rf_cv, precision_nb_cv, precision_xgb_cv),
+  F1_Score = c(f1_score_cv, f1_score_tree_cv, f1_score_rf_cv, f1_score_nb_cv, f1_score_xgb_cv),
+  Recall = c(recall_cv, recall_tree_cv, recall_rf_cv, recall_nb_cv, recall_xgb_cv)
+)
+print(model_metrics)
+```
+
+## Confusionmatrices
+```{r}
+library(caret)
+library(ggplot2)
+library(gridExtra)
+confusion_logistic <- confusionMatrix(predictions_logistic_cv, test_data$NUM_LU_TX)
+confusion_xgb <- confusionMatrix(predictions_xgb_cv, test_data$NUM_LU_TX)
+confusion_rf <- confusionMatrix(predictions_rf_cv, test_data$NUM_LU_TX)
+confusion_logistic_df <- as.data.frame(confusion_logistic$table)
+confusion_xgb_df <- as.data.frame(confusion_xgb$table)
+confusion_rf_df <- as.data.frame(confusion_rf$table)
+plot_confusion_matrix <- function(data, title) {
+  ggplot(data, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = sprintf("%1.1f%%\n%d", prop.table(Freq) * 100, Freq)), 
+              vjust = 1, color = "black", size = 4) +
+    scale_fill_gradient(low = "pink", high = "red") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.title = element_blank(),
+          legend.position = "none") +
+    labs(title = title) +
+    scale_x_discrete(labels=c("0" = "Lung Discarded", "1" = "Lung Donor Used")) +
+    scale_y_discrete(labels=c("0" = "Lung Discarded", "1" = "Lung Donor Used"))
+}
+logistic_plot <- plot_confusion_matrix(confusion_logistic_df, "Logistic Regression")
+xgb_plot <- plot_confusion_matrix(confusion_xgb_df, "XGBoost")
+rf_plot <- plot_confusion_matrix(confusion_rf_df, "Random Forest")
+grid.arrange(logistic_plot, xgb_plot, rf_plot, ncol = 3)
+
+```
+
+## Evaluation metrics 
+```{r}
+evaluate_model <- function(model, test_data, positive_class = '1') {
+  predictions <- predict(model, newdata = test_data)
+  prob_predictions <- predict(model, newdata = test_data, type = "prob")[, positive_class]
+  
+  roc_curve <- roc(response = as.factor(test_data$NUM_LU_TX), predictor = prob_predictions)
+  auc_value <- auc(roc_curve)
+  
+  confusion_mat <- confusionMatrix(predictions, as.factor(test_data$NUM_LU_TX))
+  ppv <- confusion_mat$byClass['Pos Pred Value']
+  npv <- confusion_mat$byClass['Neg Pred Value']
+  accuracy <- confusion_mat$overall['Accuracy']
+  precision <- confusion_mat$byClass['Precision']
+  recall <- confusion_mat$byClass['Sensitivity']
+  f1_score <- confusion_mat$byClass['F1']
+  prevalence <- mean(as.factor(test_data$NUM_LU_TX) == positive_class)
+  detection_rate <- sum(predictions == positive_class & test_data$NUM_LU_TX == positive_class) / length(test_data$NUM_LU_TX)
+  detection_prevalence <- sum(predictions == positive_class) / length(test_data$NUM_LU_TX)
+  balanced_accuracy <- (confusion_mat$byClass['Sensitivity'] + confusion_mat$byClass['Specificity']) / 2
+  imbalance_ratio <- length(which(test_data$NUM_LU_TX != positive_class)) / length(which(test_data$NUM_LU_TX == positive_class))
+  metrics_df <- data.frame(
+    Metric = c("AUC", "Positive Predictive Value", "Negative Predictive Value", "Accuracy", 
+               "Precision", "Recall", "F1 Score", "Prevalence", "Detection Rate", 
+               "Detection Prevalence", "Balanced Accuracy", "Imbalance Ratio"),
+    Value = c(auc_value, ppv, npv, accuracy, precision, recall, f1_score, prevalence, 
+              detection_rate, detection_prevalence, balanced_accuracy, imbalance_ratio)
+  )
+  
+  return(metrics_df)
+}
+
+logistic_metrics <- evaluate_model(model_logistic_cv, test_data)
+random_forest_metrics <- evaluate_model(model_rf_cv, test_data)
+xgboost_metrics <- evaluate_model(model_xgb_cv, test_data)
+print("Logistic Regression Model Metrics:")
+print(logistic_metrics)
+print("\nRandom Forest Model Metrics:")
+print(random_forest_metrics)
+print("\nXGBoost Model Metrics:")
+print(xgboost_metrics)
+
+```
+
+## ROC curve for all models
+```{r}
+library(pROC)
+library(ggplot2)
+roc_logistic <- roc(test_data$NUM_LU_TX, numeric_predictions)
+roc_tree <- roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_tree_cv == "1", 1, 0))
+roc_rf <- roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_rf_cv == "1", 1, 0))
+roc_nb <- roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_nb_cv == "1", 1, 0))
+roc_xgb <- roc(ifelse(test_data$NUM_LU_TX == "1", 1, 0), ifelse(predictions_xgb_cv == "1", 1, 0))
+df_logistic <- data.frame(specificity = roc_logistic$specificities, sensitivity = roc_logistic$sensitivities, model = "Logistic")
+df_tree <- data.frame(specificity = roc_tree$specificities, sensitivity = roc_tree$sensitivities, model = "Decision Tree")
+df_rf <- data.frame(specificity = roc_rf$specificities, sensitivity = roc_rf$sensitivities, model = "Random Forest")
+df_nb <- data.frame(specificity = roc_nb$specificities, sensitivity = roc_nb$sensitivities, model = "Naive Bayes")
+df_xgb <- data.frame(specificity = roc_xgb$specificities, sensitivity = roc_xgb$sensitivities, model = "XGBoost")
+roc_data <- rbind(df_logistic, df_tree, df_rf, df_nb, df_xgb)
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_point(alpha = 0.5) + # Add points
+  geom_line(size = 1.2) +   # Thicker lines
+  scale_color_manual(values = c("blue", "red", "green", "purple", "orange")) +
+  labs(title = "Classifier ROC Curves", x = "False Positive Rate", y = "True Positive Rate") +
+  theme_minimal() +
+  geom_abline(linetype = "dashed")
+```
+## IMPORTANT FEATURES FOR CLINICIANS TO CONSIDER
+
+#Random Forest
+```{r}
+importance_rf <- importance(model_rf_cv)
+importance_df <- data.frame(
+  Variable = rownames(importance_rf),
+  Importance = importance_rf[, 1]
+)
+library(ggplot2)
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "purple") +
+  coord_flip() +  
+  labs(x = "Variable", y = "Importance") +
+  ggtitle("Variable Importance Plot for Random Forest Model")
+```
+
+## XGBoost Important features
+```{r}
+xgb_booster <- model_xgb_cv$finalModel
+importance_xgb <- xgb.importance(model = xgb_booster)
+print(importance_xgb)
+xgb.plot.importance(importance_matrix = importance_xgb)
+```
+
+## Logistics Important features
+```{r}
+final_logistic_model <- model_logistic_cv$finalModel
+coefficients_logistic <- coef(final_logistic_model)
+coefficients_df <- data.frame(
+  Feature = names(coefficients_logistic),
+  Coefficient = coefficients_logistic,
+  AbsCoefficient = abs(coefficients_logistic)
+)
+sorted_coefficients_df <- coefficients_df[order(-coefficients_df$AbsCoefficient), ]
+print(sorted_coefficients_df)
+```
